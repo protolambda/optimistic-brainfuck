@@ -23,8 +23,6 @@ setup(
     },
     install_requires=[
         "remerkleable==0.1.24",
-        "rlp",
-        "ethereum",
         "Click",
     ],
     include_package_data=True,
