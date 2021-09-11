@@ -76,9 +76,14 @@ V = TypeVar('V')
 # 3 bits per brainfuck opcode, utilize all that data!
 class Code(Bitlist[MAX_CODE_SIZE]):
     @classmethod
-    def from_str(cls: Type[V], v: str) -> V:
+    def from_pretty_str(cls: Type[V], v: str) -> V:
         ops = [brainfuck_chars.index(c) for c in v]
         return cls([(op & (1 << j) != 0) for j in range(2, -1, -1) for op in ops])
+
+    def to_pretty_str(self) -> str:
+        bits = list(self)  # faster
+        ops = [((int(bits[j]) << 2) | (int(bits[j]) << 1) | int(bits[j])) for j in range(0, len(bits), 3)]
+        return ''.join(brainfuck_chars[op] for op in ops)
 
     def op_count(self) -> uint64:
         return len(self) // 3

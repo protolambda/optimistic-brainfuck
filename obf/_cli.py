@@ -1,7 +1,7 @@
 import click
-from typing import BinaryIO
+from typing import TextIO
 from .node_shim import ShimNode
-from .brainfuck import Step, next_step, parse_tx, Address, Contract, uint8
+from .brainfuck import Step, next_step, parse_tx, Address, Contract, uint8, Code
 from remerkleable.tree import PairNode, RootNode, Node
 import json
 import sys
@@ -27,23 +27,32 @@ def cli():
 # TODO: when to shut down the tracer, just in case of unexpected loop?
 SANITY_LIMIT = 10000
 
+# Enables us to save the contract with brainfuck characters, instead of more compressed form
+def contract_parse_code(obj):
+    obj['code'] = Code.from_pretty_str(obj['code']).to_obj()
+    return obj
+
+def contract_pretty_code(obj):
+    obj['code'] = Code.from_obj(obj['code']).to_pretty_str()
+    return obj
+
 
 @cli.command()
-@click.argument('state', type=click.File('wb'))
-def init_state(state: BinaryIO):
+@click.argument('state', type=click.File('wt'))
+def init_state(state: TextIO):
     """Initialize STATE
 
     STATE path to world state, will be JSON
     """
-    json.dump({
+    state.write(json.dumps({
         'contracts': {},  # 256 contract slots, starting with none
-    }, state)
+    }))
 
 
 @cli.command()
-@click.argument('state', type=click.File('rwb'))
+@click.argument('state', type=click.File('rwt'))
 @click.argument('tx', type=click.STRING)
-def transition(state: BinaryIO, tx: str):
+def transition(state: TextIO, tx: str):
     """Transition full transaction TX, update STATE
 
     STATE file/input to current brainfuck world state, encoded in JSON
@@ -54,10 +63,10 @@ def transition(state: BinaryIO, tx: str):
     if tx.startswith("0x"):
         tx = tx[2:]
     tx_bytes = bytes.fromhex(tx)
-    state_parsed = json.load(state)
+    state_parsed = json.loads(state.read())
 
     def get_contract(i: uint8) -> Contract:
-        return Contract.from_obj(state_parsed['contracts'][i])
+        return Contract.from_obj(contract_parse_code(state_parsed['contracts'][i]))
 
     click.echo("loading first step...")
     contract_id, step = parse_tx(Address(tx_bytes[:20]), tx_bytes[20:], get_contract)
@@ -78,16 +87,16 @@ def transition(state: BinaryIO, tx: str):
     if step.result_code == 0:
         click.echo("success transaction")
         # success, write back new contract state
-        state_parsed['contracts'][contract_id] = step.contract.to_obj()
+        state_parsed['contracts'][contract_id] = contract_pretty_code(step.contract.to_obj())
     else:
         click.echo("failed transaction")
 
 
 @cli.command()
-@click.argument('state', type=click.File('rb'))
+@click.argument('state', type=click.File('rt'))
 @click.argument('tx', type=click.STRING)
-@click.argument('output', type=click.File('wb'))
-def gen(output: BinaryIO, state: BinaryIO, tx: str):
+@click.argument('output', type=click.File('wt'))
+def gen(output: TextIO, state: TextIO, tx: str):
     """Generate a fraud proof for the given transaction TX, applied on top of STATE
 
     STATE file/input to current brainfuck world state, encoded in JSON.
@@ -100,10 +109,10 @@ def gen(output: BinaryIO, state: BinaryIO, tx: str):
         tx = tx[2:]
     tx_bytes = bytes.fromhex(tx)
 
-    state_parsed = json.load(state)
+    state_parsed = json.loads(state.read())
 
     def get_contract(i: uint8) -> Contract:
-        return Contract.from_obj(state_parsed['contracts'][i])
+        return Contract.from_obj(contract_parse_code(state_parsed['contracts'][i]))
 
     click.echo("loading first step...")
     contract_id, init_step = parse_tx(Address(tx_bytes[:20]), tx_bytes[20:], get_contract)
@@ -151,25 +160,25 @@ def gen(output: BinaryIO, state: BinaryIO, tx: str):
         if not right.is_leaf():
             store_tree(right)
 
-    json.dump({
+    output.write(json.dumps({
         'nodes': binary_nodes,
         'step_roots': [encode_hex(step.hash_tree_root()) for step in steps],
         'access': [
             # not that this array is 1 shorter, the last step (post output) has no access data
             [encode_hex(gi.to_bytes(length=32, byteorder='big')) for gi in acc_li] for acc_li in access_trace
         ],
-    }, output)
+    }))
 
     click.echo("done!")
 
 
 @cli.command()
-@click.argument('input', type=click.File('rb'))
+@click.argument('input', type=click.File('rt'))
 @click.argument('step', type=click.INT)
-@click.argument('output', type=click.File('wb'))
-def step_witness(input: BinaryIO, step: int, output: BinaryIO):
+@click.argument('output', type=click.File('wt'))
+def step_witness(input: TextIO, step: int, output: TextIO):
     """Compute the witness data for a single step by index, using the full trace witness"""
-    obj = json.load(input)
+    obj = json.loads(input.read())
 
     nodes = obj['nodes']
 
@@ -192,17 +201,17 @@ def step_witness(input: BinaryIO, step: int, output: BinaryIO):
     contents = {g: retrieve_node_by_gindex(int.from_bytes(bytes.fromhex(g[2:]), byteorder='big'), root)
                 for g in obj['access'][step]}
 
-    json.dump({
+    output.write(json.dumps({
         'node_by_gindex': contents,
         'root': obj['step_roots'][step],
         'step': step,
-    }, output)
+    }))
 
 
 @cli.command()
-@click.argument('input', type=click.File('rb'))
+@click.argument('input', type=click.File('rt'))
 @click.argument('claimed_post_root', type=click.STRING)
-def verify(input: BinaryIO, claimed_post_root: str):
+def verify(input: TextIO, claimed_post_root: str):
     """Verify the execution of a step
     \f
     by providing the witness data and computing the step output
@@ -210,7 +219,7 @@ def verify(input: BinaryIO, claimed_post_root: str):
     CLAIMED_POST_ROOT   hex encoded, 0x prefixed, root of contract state
        that is expected after progressing one step further
     """
-    obj = json.load(input)
+    obj = json.loads(input.read())
 
     click.echo('parsing fraud proof')
 
@@ -257,3 +266,6 @@ def verify(input: BinaryIO, claimed_post_root: str):
         click.echo("root matches, no fraud")
         sys.exit(0)
 
+
+if __name__ == '__main__':
+    cli()
