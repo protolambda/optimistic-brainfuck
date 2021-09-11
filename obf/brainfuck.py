@@ -32,21 +32,22 @@ class Address(ByteVector[20]):
 #   - Execution stops as soon as the contract outputs a 0 (success, changes are persisted) or a 1 (reverts to pre-state memory and ptr).
 #     Other outputs are ignored (todo: can use this instead to implement log events).
 #
-# Gas: a transaction gets 128 times the gas of its payload length, to loop around and stuff.
+# Gas: a transaction gets 1000 + 128 times the gas of its payload length, to loop around and stuff.
 # 1 gas is 1 brainfuck opcode. No gas is returned on exit.
 # TODO: can we afford this in terms of DoS?
 
+GAS_FREE_STIPEND = 1000
 L1_CALLDATA_TO_L2_GAS_MULTIPLIER = 128
 
-# 1 MiB per transaction
-MAX_CODE_SIZE = 1024 * 1024
+# 64 KiB per transaction
+MAX_CODE_SIZE = 64 * 1024
 
 # Note: we fail transactions that go out of bounds, we do not wrap around
-# 8 MiB memory per transaction
-MAX_CELL_COUNT = 8 * 1024 * 1024
+# 128 KiB memory per transaction
+MAX_CELL_COUNT = 128 * 1024
 
-# 1 MiB per account
-MAX_ACCOUNT_STORAGE = 1024 * 1024
+# 64 KiB per payload
+MAX_PAYLOAD_DATA = 64 * 1024
 
 # maximum amount of yet unmatched '[' at any time
 MAX_STACK_DEPTH = 1024
@@ -54,6 +55,14 @@ MAX_STACK_DEPTH = 1024
 MAX_CONTRACTS = 256
 
 brainfuck_chars = ['>', '<', '+', '-', '.', ',', '[', ']']
+
+class ExitCodes(IntEnum):
+    OK = 0
+    StackOverflow = 1
+    StackUnderflow = 2
+    NegativePtr = 3
+    PtrTooHigh = 4
+    OutOfGas = 5
 
 
 class OpCode(IntEnum):
@@ -89,7 +98,7 @@ class Code(Bitlist[MAX_CODE_SIZE]):
 
     def to_pretty_str(self) -> str:
         bits = list(self)  # faster
-        ops = [((int(bits[j]) << 2) | (int(bits[j]) << 1) | int(bits[j])) for j in range(0, len(bits), 3)]
+        ops = [((int(bits[j]) << 2) | (int(bits[j+1]) << 1) | int(bits[j+2])) for j in range(0, len(bits), 3)]
         return ''.join(brainfuck_chars[op] for op in ops)
 
     def op_count(self) -> uint32:
@@ -106,7 +115,7 @@ class Cells(List[uint8, MAX_CELL_COUNT]):
     pass
 
 
-class StateData(List[uint8, MAX_ACCOUNT_STORAGE]):
+class PayloadData(List[uint8, MAX_PAYLOAD_DATA]):
     pass
 
 
@@ -132,25 +141,20 @@ class Step(Container):
     contract: Contract
 
     input_read: uint32
-    input_data: StateData
+    input_data: PayloadData
 
     result_code: uint8
 
 
-def parse_tx(sender: Address, payload: bytes, get_contract: Callable[[uint8], Contract]) -> (uint8, Step):
-    if len(payload) == 0:
-        raise Exception("empty transactions are invalid")
-    contract_id = uint8(payload[0])
-    payload = payload[1:]
-    contract = get_contract(contract_id)
-    gas = uint64(len(payload) * L1_CALLDATA_TO_L2_GAS_MULTIPLIER)
-    return contract_id, Step(
+def parse_tx(contract: Contract, sender: Address, payload: bytes) -> Step:
+    gas = uint64(GAS_FREE_STIPEND + len(payload) * L1_CALLDATA_TO_L2_GAS_MULTIPLIER)
+    return Step(
         gas=gas,
         pc=0,
         stack=[],
         contract=contract,
         input_read=0,
-        input_data=StateData(list(sender)+list(payload)),
+        input_data=PayloadData(list(sender)+list(payload)),
         result_code=0xff,  # unused value to start with, either 0 or 1 at the end
     )
 
@@ -161,12 +165,12 @@ def next_step(last: Step) -> Step:
 
     size = last.contract.code.op_count()
     if pc >= size:
-        next.result_code = 0  # success, contract completed
+        next.result_code = ExitCodes.OK
         return next
 
     # count 1 gas for this operation
     if last.gas == 0:
-        next.result_code = 1  # error, out of gas
+        next.result_code = ExitCodes.OutOfGas
         return next
 
     next.gas -= 1
@@ -184,7 +188,7 @@ def next_step(last: Step) -> Step:
     if last.indent > 0:
         if op == OpCode.JUMP_COND:
             if last.indent > MAX_STACK_DEPTH:
-                next.result_code = 1  # stack overflow during traversal to end of jump work
+                next.result_code = ExitCodes.StackOverflow
                 return next
             next.indent += 1
             next.pc += 1
@@ -198,14 +202,14 @@ def next_step(last: Step) -> Step:
             return next
 
     if op == OpCode.MOVE_RIGHT:
-        if last.contract.ptr != MAX_CELL_COUNT - 1:
+        if last.contract.ptr < MAX_CELL_COUNT - 1:
             if last.contract.ptr + 1 >= len(last.contract.cells):  # dynamically grow the cells data
                 next.contract.cells.append(uint8(0))
             next.contract.ptr += 1
             next.pc += 1
             return next
         else:
-            next.result_code = 1  # error
+            next.result_code = ExitCodes.PtrTooHigh
             return next
     elif op == OpCode.MOVE_LEFT:
         if last.contract.ptr != 0:
@@ -213,7 +217,7 @@ def next_step(last: Step) -> Step:
             next.pc += 1
             return next
         else:
-            next.result_code = 1  # error
+            next.result_code = ExitCodes.NegativePtr
             return next
     elif op == OpCode.INCR_CELL:
         cell_value = last.contract.cells[last.contract.ptr]
@@ -252,14 +256,14 @@ def next_step(last: Step) -> Step:
             return next
         else:
             if len(last.stack) == MAX_STACK_DEPTH:
-                next.result_code = 1  # stack overflow
+                next.result_code = ExitCodes.StackOverflow
                 return next
             next.stack.append(pc)
             next.pc += 1
             return next
     elif op == OpCode.JUMP_BACK:
         if len(last.stack) == 0:
-            next.result_code = 1  # stack underflow
+            next.result_code = ExitCodes.StackUnderflow
             return next
         back_pc = last.stack[len(last.stack) - 1]
         next.stack.pop()
