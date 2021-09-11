@@ -50,26 +50,31 @@ def init_state(state: TextIO):
 
 
 @cli.command()
-@click.argument('state', type=click.File('rwt'))
+@click.argument('input', type=click.File('rt'))
+@click.argument('output', type=click.File('wt'))
+@click.argument('sender', type=click.STRING)
 @click.argument('tx', type=click.STRING)
-def transition(state: TextIO, tx: str):
-    """Transition full transaction TX, update STATE
+def transition(input: TextIO, output: TextIO, sender: str, tx: str):
+    """Transition full transaction TX, read INPUT state and write OUTPUT state
 
-    STATE file/input to current brainfuck world state, encoded in JSON
+    INPUT file/input to current brainfuck world state, encoded in JSON
+
+    OUTPUT where the updated state is written to
+
+    SENDER sender address, 32 bytes, hex encoded and 0x prefix
 
     TX brainfuck tx payload
     """
     click.echo("decoding transaction: "+tx)
-    if tx.startswith("0x"):
-        tx = tx[2:]
-    tx_bytes = bytes.fromhex(tx)
-    state_parsed = json.loads(state.read())
+    tx_bytes = decode_hex(tx)
+
+    state_parsed = json.loads(input.read())
 
     def get_contract(i: uint8) -> Contract:
-        return Contract.from_obj(contract_parse_code(state_parsed['contracts'][i]))
+        return Contract.from_obj(contract_parse_code(state_parsed['contracts'][str(i)]))
 
     click.echo("loading first step...")
-    contract_id, step = parse_tx(Address(tx_bytes[:20]), tx_bytes[20:], get_contract)
+    contract_id, step = parse_tx(Address(decode_hex(sender)), tx_bytes, get_contract)
     click.echo("selected brainfuck contract %d" % contract_id)
 
     click.echo("updating state by just generating and applying all fraud proof steps...")
@@ -83,13 +88,15 @@ def transition(state: TextIO, tx: str):
         step = next_step(step)
         if step.result_code != 0xff:  # have we finished yet?
             break
+    print()  # new line after \r loop
 
     if step.result_code == 0:
         click.echo("success transaction")
         # success, write back new contract state
-        state_parsed['contracts'][contract_id] = contract_pretty_code(step.contract.to_obj())
+        state_parsed['contracts'][str(contract_id)] = contract_pretty_code(step.contract.to_obj())
+        output.write(json.dumps(state_parsed))
     else:
-        click.echo("failed transaction")
+        click.echo("failed transaction, no state changes")
 
 
 @cli.command()
@@ -112,7 +119,7 @@ def gen(output: TextIO, state: TextIO, tx: str):
     state_parsed = json.loads(state.read())
 
     def get_contract(i: uint8) -> Contract:
-        return Contract.from_obj(contract_parse_code(state_parsed['contracts'][i]))
+        return Contract.from_obj(contract_parse_code(state_parsed['contracts'][str(i)]))
 
     click.echo("loading first step...")
     contract_id, init_step = parse_tx(Address(tx_bytes[:20]), tx_bytes[20:], get_contract)
@@ -148,6 +155,7 @@ def gen(output: TextIO, state: TextIO, tx: str):
         steps.append(next)
         if next.result_code != 0xff:  # have we finished yet?
             break
+    print()  # new line after \r loop
 
     binary_nodes = dict()
 

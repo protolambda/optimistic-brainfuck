@@ -1,7 +1,7 @@
 from enum import IntEnum
 from typing import TypeVar, Type, Callable
-from remerkleable.complex import Container, Vector, List
-from remerkleable.basic import uint64, uint8
+from remerkleable.complex import Container, List
+from remerkleable.basic import uint64, uint32, uint8
 from remerkleable.bitfields import Bitlist
 from remerkleable.byte_arrays import ByteVector
 
@@ -69,6 +69,9 @@ class OpCode(IntEnum):
     def character(self) -> str:
         return brainfuck_chars[self]
 
+    def __str__(self):
+        return self.character()
+
 
 V = TypeVar('V')
 
@@ -78,24 +81,28 @@ class Code(Bitlist[MAX_CODE_SIZE]):
     @classmethod
     def from_pretty_str(cls: Type[V], v: str) -> V:
         ops = [brainfuck_chars.index(c) for c in v]
-        return cls([(op & (1 << j) != 0) for j in range(2, -1, -1) for op in ops])
+        bits = []
+        for op in ops:
+            for j in range(2, -1, -1):
+                bits.append(op & (1 << j) != 0)
+        return cls(bits)
 
     def to_pretty_str(self) -> str:
         bits = list(self)  # faster
         ops = [((int(bits[j]) << 2) | (int(bits[j]) << 1) | int(bits[j])) for j in range(0, len(bits), 3)]
         return ''.join(brainfuck_chars[op] for op in ops)
 
-    def op_count(self) -> uint64:
+    def op_count(self) -> uint32:
         return len(self) // 3
 
-    def get_op(self, i: uint64) -> OpCode:
+    def get_op(self, i: uint32) -> OpCode:
         i *= 3
         a, b, c = self[i], self[i + 1], self[i + 2]
         op = (int(a) << 2) | (int(b) << 1) | int(c)
         return OpCode(op)
 
 
-class Cells(Vector[uint8, MAX_CELL_COUNT]):
+class Cells(List[uint8, MAX_CELL_COUNT]):
     pass
 
 
@@ -106,7 +113,7 @@ class StateData(List[uint8, MAX_ACCOUNT_STORAGE]):
 class Contract(Container):
     code: Code
     cells: Cells
-    ptr: uint64
+    ptr: uint32
     # the pc is always reset to 0 in each transaction
 
 
@@ -116,13 +123,15 @@ class Step(Container):
     gas: uint64
 
     # Program counter, pointing to current op code
-    pc: uint64
+    pc: uint32
     # keeps track of the pc of every past opening bracket '[', to return to later
-    stack: List[uint8, MAX_STACK_DEPTH]
+    stack: List[uint32, MAX_STACK_DEPTH]
+    # any opcode, except [ and ] is ignored until this indent is back to 0
+    indent: uint32
 
     contract: Contract
 
-    input_read: uint64
+    input_read: uint32
     input_data: StateData
 
     result_code: uint8
@@ -141,7 +150,7 @@ def parse_tx(sender: Address, payload: bytes, get_contract: Callable[[uint8], Co
         stack=[],
         contract=contract,
         input_read=0,
-        input=StateData(*sender, *payload),
+        input_data=StateData(list(sender)+list(payload)),
         result_code=0xff,  # unused value to start with, either 0 or 1 at the end
     )
 
@@ -150,7 +159,7 @@ def next_step(last: Step) -> Step:
     next = last.copy()
     pc = last.pc
 
-    size = last.code.op_count()
+    size = last.contract.code.op_count()
     if pc >= size:
         next.result_code = 0  # success, contract completed
         return next
@@ -163,9 +172,35 @@ def next_step(last: Step) -> Step:
     next.gas -= 1
 
     # run the operation
-    op = last.code.get_op(pc)
+    op = last.contract.code.get_op(pc)
+
+    # print("----")
+    # print("op", op)
+    # print("ptr", last.contract.ptr)
+    # print("stack", list(last.stack))
+    # print("cells", list(last.contract.cells))
+    # print("indent", last.indent)
+
+    if last.indent > 0:
+        if op == OpCode.JUMP_COND:
+            if last.indent > MAX_STACK_DEPTH:
+                next.result_code = 1  # stack overflow during traversal to end of jump work
+                return next
+            next.indent += 1
+            next.pc += 1
+            return next
+        elif op == OpCode.JUMP_BACK:
+            next.indent -= 1
+            next.pc += 1
+            return next
+        else:
+            next.pc += 1
+            return next
+
     if op == OpCode.MOVE_RIGHT:
         if last.contract.ptr != MAX_CELL_COUNT - 1:
+            if last.contract.ptr + 1 >= len(last.contract.cells):  # dynamically grow the cells data
+                next.contract.cells.append(uint8(0))
             next.contract.ptr += 1
             next.pc += 1
             return next
@@ -191,15 +226,6 @@ def next_step(last: Step) -> Step:
         next.pc += 1
         return next
     elif op == OpCode.GET_CELL:
-        if last.input_read < len(last.input_data):
-            new_cell_value = last.input_data[last.input_read]
-        else:
-            new_cell_value = 0
-        next.contract.cells[last.contract.ptr] = new_cell_value
-        next.input_read += 1
-        next.pc += 1
-        return next
-    elif op == OpCode.PUT_CELL:
         cell_value = last.contract.cells[last.contract.ptr]
         if cell_value == 0 or cell_value == 1:
             next.result_code = cell_value
@@ -208,11 +234,21 @@ def next_step(last: Step) -> Step:
             # ignore the value, continue
             next.pc += 1
             return next
+    elif op == OpCode.PUT_CELL:
+        if last.input_read < len(last.input_data):
+            new_cell_value = last.input_data[last.input_read]
+        else:
+            new_cell_value = 0
+        next.contract.cells[last.contract.ptr] = new_cell_value
+        next.input_read += 1
+        next.pc += 1
+        return next
     elif op == OpCode.JUMP_COND:
         cell_value = last.contract.cells[last.contract.ptr]
         if cell_value == 0:
-            # just skip if False
+            # we want to skip to matching ], we do this by tracking indentation
             next.pc += 1
+            next.indent += 1
             return next
         else:
             if len(last.stack) == MAX_STACK_DEPTH:
