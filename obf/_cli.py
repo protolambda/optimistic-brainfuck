@@ -29,17 +29,27 @@ SANITY_LIMIT = 10000
 
 
 @cli.command()
-@click.argument('state', type=click.File('wb'), help="path to world state, will be JSON")
+@click.argument('state', type=click.File('wb'))
 def init_state(state: BinaryIO):
+    """Initialize STATE
+
+    STATE path to world state, will be JSON
+    """
     json.dump({
         'contracts': {},  # 256 contract slots, starting with none
     }, state)
 
 
 @cli.command()
-@click.argument('state', type=click.File('rwb'), help="path to current brainfuck world state, encoded in JSON")
-@click.argument('tx', type=click.STRING, help="brainfuck tx payload")
+@click.argument('state', type=click.File('rwb'))
+@click.argument('tx', type=click.STRING)
 def transition(state: BinaryIO, tx: str):
+    """Transition full transaction TX, update STATE
+
+    STATE file/input to current brainfuck world state, encoded in JSON
+
+    TX brainfuck tx payload
+    """
     click.echo("decoding transaction: "+tx)
     if tx.startswith("0x"):
         tx = tx[2:]
@@ -74,11 +84,16 @@ def transition(state: BinaryIO, tx: str):
 
 
 @cli.command()
+@click.argument('state', type=click.File('rb'))
+@click.argument('tx', type=click.STRING)
 @click.argument('output', type=click.File('wb'))
-@click.argument('state', type=click.File('rb'), help="path to current brainfuck world state, encoded in JSON")
-@click.argument('tx', type=click.STRING, help="brainfuck tx payload")
 def gen(output: BinaryIO, state: BinaryIO, tx: str):
-    """Generate a fraud proof for the given transaction"""
+    """Generate a fraud proof for the given transaction TX, applied on top of STATE
+
+    STATE file/input to current brainfuck world state, encoded in JSON.
+
+    TX brainfuck tx payload
+    """
 
     click.echo("decoding transaction: "+tx)
     if tx.startswith("0x"):
@@ -150,8 +165,8 @@ def gen(output: BinaryIO, state: BinaryIO, tx: str):
 
 @cli.command()
 @click.argument('input', type=click.File('rb'))
-@click.argument('output', type=click.File('wb'))
 @click.argument('step', type=click.INT)
+@click.argument('output', type=click.File('wb'))
 def step_witness(input: BinaryIO, step: int, output: BinaryIO):
     """Compute the witness data for a single step by index, using the full trace witness"""
     obj = json.load(input)
@@ -186,12 +201,15 @@ def step_witness(input: BinaryIO, step: int, output: BinaryIO):
 
 @cli.command()
 @click.argument('input', type=click.File('rb'))
-@click.argument('claimed_post_root', type=click.STRING, help="hex encoded, 0x prefixed, root of contract state"
-                                                             " that is expected after progressing one step further")
+@click.argument('claimed_post_root', type=click.STRING)
 def verify(input: BinaryIO, claimed_post_root: str):
     """Verify the execution of a step
     \f
-    by providing the witness data and computing the step output"""
+    by providing the witness data and computing the step output
+
+    CLAIMED_POST_ROOT   hex encoded, 0x prefixed, root of contract state
+       that is expected after progressing one step further
+    """
     obj = json.load(input)
 
     click.echo('parsing fraud proof')

@@ -24,6 +24,9 @@ setup(
     install_requires=[
         "remerkleable==0.1.24",
         "Click",
+        # one of the two for keccak256
+        "pysha3",
+        "pycryptodome>=3.3.1"
     ],
     include_package_data=True,
     entry_points={
