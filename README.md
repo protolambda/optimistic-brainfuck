@@ -62,7 +62,7 @@ obf gen state.json proof.json '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 0 '0x
 ```
 
 Output:
-```json
+```js
 {
    "nodes": { /* key -> [left node, right node] */},
    "step_roots": [ /* merkle roots of each step, as well as the final output, to play dispute game on */],
@@ -75,7 +75,7 @@ Build a witness for a specific step, e.g. step 53:
 step-witness proof.json step53.json 53
 ```
 
-```json
+```js
 {
   "node_by_gindex": {
     "0x0000000000000000000000000000000000000000000000000000000000000008": "0x0000000000000433000000000000000000000000000000000000000000000000",
