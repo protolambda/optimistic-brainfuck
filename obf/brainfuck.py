@@ -22,19 +22,6 @@ class Address(ByteVector[20]):
 # 110   [ 	        Jump past the matching ] if the cell at the pointer is 0
 # 111   ] 	        Jump back to the matching [ if the cell at the pointer is nonzero
 #
-# State:
-#   - There are 256 brainfuck contract slots
-#   - Contracts can only be created via a L1 deposit, with a fee
-#   - Memory cells and pointer are persisted per contract, essentially cheap and easy to navigate storage
-#   - Regular transactions are input data to the contract specified by the transaction, it's up to the contract to read and process it
-#   - The l1 sender is always put in the first 20 input bytes, so the contract can trust the user
-#   - Contract program counter always starts at 0
-#   - Execution stops as soon as the contract outputs a 0 (success, changes are persisted) or a 1 (reverts to pre-state memory and ptr).
-#     Other outputs are ignored (todo: can use this instead to implement log events).
-#
-# Gas: a transaction gets 1000 + 128 times the gas of its payload length, to loop around and stuff.
-# 1 gas is 1 brainfuck opcode. No gas is returned on exit.
-# TODO: can we afford this in terms of DoS?
 
 GAS_FREE_STIPEND = 1000
 L1_CALLDATA_TO_L2_GAS_MULTIPLIER = 128

@@ -4,7 +4,33 @@ Ever wanted to run [Brainfuck](https://esolangs.org/wiki/Brainfuck) on ethereum?
 
 If you can plug in Brainfuck, you can plug in **anything**. [EVM is a work in progress](https://github.com/protolambda/macula).
 
+## State
 
+State:
+- There are 256 brainfuck contract slots
+- Contracts can only be created via a L1 deposit, with a fee (not implemented)
+- Memory cells and pointer are persisted per contract, essentially cheap and easy to navigate storage
+- Regular transactions are input data to the contract specified by the transaction, it's up to the contract to read and process it
+- The l1 sender is always put in the first 20 input bytes, so the contract can trust the user (compare it against its memory)
+- Contract program counter always starts at 0
+- Execution stops as soon as the contract outputs a `0x00` (success, changes are persisted).
+  Higher codes are used as error codes (reverts to pre-state memory and ptr), e.g. stack-overflow, out-of-gas, etc.
+  `0xff` is reserved as placeholder during execution.
+
+Gas: a transaction gets 1000 + 128 times the gas based on its payload length, to loop around and do fun things.
+1 gas is 1 brainfuck opcode. No gas is returned on exit. These numbers can be tuned.
+
+
+## Running
+
+Quick install in encapsulated environment:
+```shell
+python -m venv venv
+source venv/bin/activate
+pip install -e .
+```
+
+Get a genesis state:
 ```shell
 # create a state with example contract
 obf init-state state.json
