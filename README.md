@@ -126,7 +126,7 @@ transaction was effective, post contract root: 0x438d23b78af4c6701d00630bb716c6d
 root matches, no fraud
 ```
 
-Or with a slightly different root (thus wrong, like a malicous actor might try):
+Or with a slightly different root (thus wrong, like a malicious actor might try):
 ```shell
 obf verify step53.json "0x438d23b78af4c6701d00630bb716c6dfdab5390ce0a5425fe5419f0cd0242183"
 ```
